@@ -13,9 +13,16 @@
 #   5. copies the skill to ~/.claude/skills/codex-bridge/
 #   6. runs bin/check-all.sh
 #
-# It never overwrites a Codex configuration file you already have. If one exists
-# and differs from what this project expects, you are told and the file is left
-# alone. Re-running is safe.
+# ~/.codex above is the default. CODEX_HOME overrides it, and the runner and the
+# health check resolve the same variable, so the three cannot disagree about
+# where the profile lives. It has to be an absolute path.
+#
+# It never overwrites a Codex configuration file you already have. AGENTS.md and
+# the profile are created only when absent, and an AGENTS.md missing the reviewer
+# instruction is reported, not edited, unless you say yes. Step 4 is the one
+# exception and the only file this script changes on its own: a config.toml
+# without an [agents] section gets one appended, because the fanout route needs
+# it and silently stops fanning out without it. Re-running is safe.
 #
 # The one thing it does replace is a previous install of THIS skill: the old
 # directory is moved to ~/.claude/codex-bridge.previous, and an older backup
@@ -57,6 +64,32 @@ if [ "$MODE" = --uninstall ]; then
   printf 'AGENTS.md, claude-safe.config.toml and config.toml may be used by other tools.\n'
   exit 0
 fi
+
+# ---------------------------------------------------------------- codex home
+
+# Deliberately AFTER the uninstall branch. Removing an installed copy must not
+# depend on the state of the source tree: an earlier version of this check ran
+# up here and made `--uninstall` fail on an incomplete checkout, leaving the
+# installed skill in place with nothing to remove it.
+#
+# Refused, not resolved: a relative value would put the profile next to whatever
+# directory this script was started from, while the runner would look for it next
+# to the directory ITS caller was started from. Codex resolves it once more, on
+# its own. Three answers to one question is worse than no answer. The test comes
+# from the kit being installed, so the installer and the installed runner cannot
+# disagree about what "absolute" means -- it is platform-dependent, and a
+# drive-letter path is absolute only where drive letters exist.
+if [ -f "$SKILL_SRC/bin/compat.sh" ]; then
+  # shellcheck source=skill/bin/compat.sh
+  . "$SKILL_SRC/bin/compat.sh"
+else
+  printf 'cannot find %s -- run this script from a complete checkout\n' "$SKILL_SRC/bin/compat.sh" >&2
+  exit 1
+fi
+compat_is_absolute "$CODEX_HOME" || {
+  printf 'CODEX_HOME must be an absolute path (got "%s")\n' "$CODEX_HOME" >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------- prerequisites
 

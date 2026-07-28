@@ -30,12 +30,25 @@ SKILL_DIR=$(cd "$BIN_DIR/.." && pwd)
 REGISTRY="$BIN_DIR/routes.conf"
 LOG_DIR="$SKILL_DIR/var"
 LOG="$LOG_DIR/calls.jsonl"
+# Codex itself honours CODEX_HOME, and so does install.sh. Hard-coding
+# ~/.codex here meant an install under a custom CODEX_HOME wrote its files in
+# one place while this check looked in another, and the bridge refused to start
+# with "run install.sh" -- pointing at the step that had already succeeded.
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 
 # shellcheck source=compat.sh
 . "$BIN_DIR/compat.sh"
 
 die()  { printf 'ERROR: %s\n' "$1" >&2; exit "${2:-2}"; }
 note() { printf '%s\n' "$1" >&2; }
+
+# A relative CODEX_HOME resolves against whatever directory each process happens
+# to start in: install.sh would write the profile next to itself, and this runner
+# would look for it next to the caller. Refuse rather than resolve it here, since
+# resolving would only move the disagreement to Codex, which does its own. What
+# counts as absolute is platform-dependent -- see compat_is_absolute.
+compat_is_absolute "$CODEX_DIR" \
+  || die "CODEX_HOME must be an absolute path (got '$CODEX_DIR'): a relative one names a different directory for every process that resolves it"
 
 [ -f "$REGISTRY" ] || die "route registry not found: $REGISTRY"
 [ $# -eq 1 ] || die "expects exactly one argument -- the path to a request file"
@@ -74,7 +87,13 @@ log_event() {
     fi
     shift 2
   done
-  printf '%s}\n' "$line" >> "$LOG"
+  # A failed append used to be invisible: the call ran, the verdict arrived, and
+  # the log simply had no line for it -- which reads later as "no call was made"
+  # rather than "the log could not be written". Not fatal (a verdict is worth
+  # more than its bookkeeping), but never silent.
+  if ! printf '%s}\n' "$line" >> "$LOG" 2>/dev/null; then
+    printf 'WARNING: could not write the call log %s -- the call continues, but this event is unrecorded\n' "$LOG" >&2
+  fi
 }
 
 # ---------------------------------------------------------------- request
@@ -395,8 +414,8 @@ preflight() {
   # so grep for the anchor phrase rather than just checking the file exists.
   local anchor_file="$BIN_DIR/agents-anchor.txt" anchor
   anchor=$(cat "$anchor_file" 2>/dev/null || printf 'Look for what breaks')
-  grep -qF -- "$anchor" "$HOME/.codex/AGENTS.md" 2>/dev/null \
-    || die "~/.codex/AGENTS.md is missing or does not contain the skeptic instruction. Run install.sh." 1
+  grep -qF -- "$anchor" "$CODEX_DIR/AGENTS.md" 2>/dev/null \
+    || die "$CODEX_DIR/AGENTS.md is missing or does not contain the skeptic instruction. Run install.sh." 1
   mkdir -p "$LOG_DIR" 2>/dev/null
   printf '%s\n' "$ver" > "$mark"
 }
@@ -405,8 +424,8 @@ preflight
 # The profile only matters to routes that write; its absence breaks image
 # generation in a confusing way, so check it explicitly.
 if [ "$R_profile" != none ]; then
-  [ -f "$HOME/.codex/$R_profile.config.toml" ] \
-    || die "missing profile ~/.codex/$R_profile.config.toml (a V2 profile IS that file). Run install.sh." 1
+  [ -f "$CODEX_DIR/$R_profile.config.toml" ] \
+    || die "missing profile $CODEX_DIR/$R_profile.config.toml (a V2 profile IS that file). Run install.sh." 1
 fi
 
 # ---------------------------------------------------------------- run

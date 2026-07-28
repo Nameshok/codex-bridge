@@ -6,8 +6,14 @@ like paranoia, and so that the same mistakes are not made again from scratch.
 
 Six earlier versions of this skill died the same way: **the prose drifted from
 the verified mechanism.** The seventh moved the mechanism out of the text and
-into code — a registry, one entry point, and two regression suites. The prose is
-now generated from the registry, so there is nothing left to drift.
+into code — a registry, one entry point, and two regression suites. The route
+table is generated from the registry and cannot drift.
+
+The rest of the prose still can, and did. The first review after 1.0.0 went
+looking for claims rather than defects and found six paragraphs promising what
+the code did not do — the last section of this file lists them. Generation fixed
+the one table it covers; everything outside those markers is still a claim that
+has to be re-checked against the code that moved underneath it.
 
 Two things recur throughout and are worth stating up front:
 
@@ -412,3 +418,147 @@ reason:
   simultaneous calls producing exactly six valid lines.
 - **Exposing the bridge as an MCP server.** A skill already works, with less
   moving machinery.
+
+## Documentation that promised more than the code delivered
+
+The first review after the 1.0.0 tag went looking for claims rather than bugs,
+and the claims lost. Each of these was confirmed by running something, not by
+reading.
+
+- **"never sees a secret the gates can recognise" (README).** The gates live in
+  `codex-snapshot.sh`. `codex-run.sh` never calls it. A dry run of `route=review`
+  against a repository holding a plain `.env` produced `-C <repo>` and no
+  refusal, while `codex-snapshot.sh` on that same repository stopped with exit 2.
+  The gates protect the review workflow because that workflow builds a snapshot
+  first — not because the runner enforces them. The README now says so, and the
+  limitation is listed with the others rather than contradicted three paragraphs
+  later by "there is no read boundary".
+- **"where a config file exists ... it says so and leaves it alone" (CHANGELOG).**
+  Installing into a throwaway HOME whose `config.toml` had no `[agents]` section
+  appended five lines to it without asking. True of `AGENTS.md` and the profile,
+  false of `config.toml`. The behaviour is deliberate — without `[agents]` the
+  fanout route silently stops fanning out — so the text changed, not the code.
+- **"On the image routes, `-C` points at an asset directory" (SKILL.md).** It sat
+  inside a paragraph opening with "enforced by mechanism, not by wording", and
+  the mechanism does not enforce it: the runner checks that `dir` exists and
+  passes it through. A dry run of `route=image` with `dir=<project root>` yielded
+  `-s workspace-write -C <project root>`. That is a convention, and it is now
+  labelled as one.
+- **"The runner warns when it finds one" about a project `.codex/config.toml`.**
+  It exits 2. Two other lines of the same file already said "stop"; one said
+  "warns". A document that contradicts itself is worse than one that is merely
+  wrong, because a reader cannot tell which half to trust.
+- **"this remains a hole: switch the gate to `-z`" about control characters in
+  filenames.** The gate already refuses any C-quoted name outright, and
+  `test-snapshot.sh` proves it on POSIX, where such a name can be created. The
+  documentation was understating its own protection — the mirror image of every
+  other item here, and just as misleading.
+- **A health check that could not find a correct install.** `install.sh` honours
+  `CODEX_HOME`; `codex-run.sh` and `check-all.sh` read `$HOME/.codex` literally.
+  Installing with `CODEX_HOME` set wrote three files where it was told and then
+  reported "3 FAILURES -- resolve before using", pointing at the step that had
+  just succeeded. Both readers now use `${CODEX_HOME:-$HOME/.codex}`.
+- **Consensus accepted one model as two.** The independence check compared
+  `model/effort`, so `review-critical` (sol/xhigh) and `plan-critical` (sol/max)
+  passed as different — the run printed `gpt-5.6-sol` twice and continued. More
+  effort buys more findings from the same weights; it does not buy a second
+  opinion. The check now compares the model slug.
+- **A silent call log.** A failed append left no line and no complaint, which
+  reads afterwards as "no call was made" rather than "the log could not be
+  written". The call still proceeds — a verdict outweighs its bookkeeping — but
+  it now says so on stderr.
+
+The pattern worth keeping: every one of these was a sentence nobody re-read after
+the code beneath it changed. Prose that describes a mechanism has to be tested
+like the mechanism, and the only test that works is running the thing and
+comparing.
+
+### The fixes needed fixing, again
+
+Re-reviewing the patch above — the rule that a fix gets checked like any other
+change — found three defects introduced by it, which is exactly the pattern
+recorded at the top of this file.
+
+- **A resolver that resolves differently per process.** Replacing `$HOME/.codex`
+  with `${CODEX_HOME:-$HOME/.codex}` fixed the mismatch with the installer and
+  created a subtler one: a relative `CODEX_HOME` is resolved against whatever
+  directory each process starts in, so the installer, the runner, the health
+  check and Codex itself could each mean a different folder. The `claude-safe`
+  profile — the net under the routes that may write — is found by that path.
+  Resolving it in the scripts would only have moved the disagreement to Codex,
+  which resolves it once more on its own, so all three refuse a relative value
+  instead.
+- **A guard that spends before it decides.** Comparing model slugs made the
+  independence check correct for well-formed registries and left it open for
+  broken ones: `route_field` returns an empty string for a missing field, an
+  empty slug compares unequal to a real one, and both runs started. The refusal
+  arrived from the runner, after the first call had been spent. Verified by
+  deleting one `model:` line in a copy and watching both runs begin.
+- **A test that could pass for the wrong reason.** The new regression case
+  asserted only `rc=2`. A missing `node`, an unreadable schema or an empty
+  registry field all exit 2 as well, so the test would have gone green while
+  proving nothing. Worse, a real regression there means the pair is *accepted* —
+  and an accepted pair calls Codex twice for real, so a failing test would have
+  spent quota. Both new cases now force `CODEX_RUN_DRYRUN=1` and assert the
+  message, not the code.
+
+The rule this leaves: **a fix inherits the burden of proof from the defect.**
+Reviewing the patch that closes a finding is not ceremony; here it caught more
+than the original pass did.
+
+### Two rounds of fixes, two more defects in them
+
+The patch that fixed the fixes was itself reviewed, and it too was wrong twice.
+Recording this because the shape repeats: each round narrowed the hole rather
+than closing it, and only running the case showed which.
+
+- **"Absolute" is not one thing.** The guard for `CODEX_HOME` accepted a
+  drive-letter path on every platform. Under Git Bash `C:/tmp` is absolute; under
+  Linux, macOS or WSL it is a directory named `C:` relative to the cwd, so on the
+  three platforms where the guard mattered most it would have waved through the
+  exact class of value it was written to stop. The test is now one function,
+  `compat_is_absolute`, and the suite asserts both halves — drive paths absolute
+  where drives exist, relative where they do not — so it can run unchanged on all
+  three CI runners.
+- **Non-empty is not the same as filled in.** The consensus guard tested `[ -n
+  "$MODEL" ]`. A registry line reading `model:` followed by spaces yields `"   "`:
+  non-empty, unequal to any real slug, accepted as independent. Both runs started
+  and the first call was spent before the runner rejected the second — the same
+  failure the previous round had just fixed, reached through a different door.
+  Confirmed by planting the blank line and watching `run 1` and `run 2` appear.
+- **And the fix for the first one was written wrong.** The new
+  `compat_is_absolute` used the pattern `[A-Za-z]:[/\\]*`. Inside a bracket
+  expression bash consumes a trailing backslash as an escape, so the pattern
+  matched nothing at all and `C:/codex` was reported as *not* absolute — on the
+  one platform where it is. Written with the backslash first, `[\\/]`, it works.
+  Nothing about the line looks wrong; the suite failed two assertions the first
+  time it ran, which is the only reason this was caught rather than shipped.
+
+A fourth round found two more, both introduced by the third:
+
+- **A guard that blocked its own removal.** Sourcing `compat.sh` for the new
+  check was placed above the `--uninstall` branch, so an incomplete checkout made
+  uninstalling impossible: the script exited before reaching the code that
+  removes the installed copy, and the installed copy was the thing you were
+  trying to get rid of. Removing an installation must never depend on the state
+  of the source tree. Reproduced by deleting `compat.sh` from a copy and watching
+  the skill directory survive `--uninstall`.
+- **The same backslash trap, one line down.** `\\server\share` is an absolute
+  path on Windows and was classified as relative, because the guard recognised
+  only the `//server/share` spelling. Writing the pattern inline invites exactly
+  the quoting mistake made above, so it is built from a literal variable and
+  matched inside double quotes, where nothing is escaped and nothing can be
+  mis-escaped.
+
+One finding from that round was **rejected**: that a user who sets
+`MSYS2_ENV_CONV_EXCL=CODEX_HOME` makes bash and Codex resolve the same absolute
+string to different directories. True, and outside what this guard can do — it
+checks the *shape* of a path, not the identity of its resolution in two
+runtimes. Disabling MSYS path translation breaks that agreement for every tool
+on the machine at once. It is now stated as a limitation instead of being
+silently patched over.
+
+Both were found by a review of the fix, not of the original code. The cost of
+that review was one call; the cost of shipping either defect would have been a
+silently weakened guard in the part of the kit whose entire purpose is to be
+trustworthy when it says no.

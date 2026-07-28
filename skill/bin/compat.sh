@@ -132,3 +132,39 @@ compat_report() {
   printf 'shell=%s os=%s timeout=%s\n' \
     "${BASH_VERSION:-?}" "$(uname -s 2>/dev/null || echo unknown)" "$COMPAT_TIMEOUT_KIND"
 }
+
+# --- absolute-path test, platform aware --------------------------------------
+# CODEX_HOME has to be absolute: a relative value is resolved against whatever
+# directory each process starts in, and the installer, this kit and Codex itself
+# all resolve it separately. What counts as absolute is NOT the same everywhere.
+# "C:/tmp" is an absolute path under Git Bash or Cygwin, where a drive letter
+# exists; under Linux, macOS or WSL it is a RELATIVE name -- a directory called
+# "C:" -- so accepting it there would reintroduce the very problem this test
+# exists to prevent. A UNC path (//server/share) is covered by the leading-slash
+# case on every platform.
+#
+# Mind the bracket order in the drive pattern: `[\\/]` matches, `[/\\]` does not.
+# With the backslash last, bash treats it as an escape inside the bracket
+# expression and the pattern silently stops matching anything -- which reported
+# `C:/codex` as "not absolute" on the one platform where it is absolute. The
+# suite caught that; reading the code did not.
+compat_is_absolute() {
+  # Two literal backslashes, built rather than written as a pattern: quoting
+  # rules for backslashes inside a case pattern are exactly what broke the drive
+  # pattern above, and a variable expanded inside double quotes is matched
+  # literally with no escaping to get wrong.
+  _compat_unc='\\'
+  case $1 in
+    /*) return 0 ;;
+    [A-Za-z]:[\\/]* | "$_compat_unc"*)
+      # Drive letters and backslash UNC paths are absolute only where Windows
+      # path semantics apply. Under Linux, macOS or WSL "C:/tmp" is a directory
+      # named "C:" relative to the cwd, and a leading backslash is an ordinary
+      # character in a filename.
+      case ${OSTYPE:-$(uname -s 2>/dev/null || printf unknown)} in
+        msys*|cygwin*|win32*|MINGW*|MSYS*|CYGWIN*) return 0 ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}

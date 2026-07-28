@@ -30,10 +30,11 @@ claims one model while running another is a lie the tests cannot catch.
 
 ## Codex subagents
 
-Enabled through the `[agents]` section of `~/.codex/config.toml` (the installer
-adds it): up to 3 parallel threads, subagents defaulting to `gpt-5.6-terra` at
-`high` — the main agent thinks, the subagents gather. There is no dedicated CLI
-command; **the orchestration is expressed in the prompt.**
+Enabled through the `[agents]` section of `~/.codex/config.toml` — or of
+`$CODEX_HOME/config.toml` where that variable is set, which is the one file the
+installer edits on its own: up to 3 parallel threads, subagents defaulting to
+`gpt-5.6-terra` at `high` — the main agent thinks, the subagents gather. There is
+no dedicated CLI command; **the orchestration is expressed in the prompt.**
 
 The route is `fanout`. It is the only reviewing route that runs with the base
 config (`config: base` in the registry): `--ignore-user-config` would discard

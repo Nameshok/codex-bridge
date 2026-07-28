@@ -9,9 +9,12 @@ description: "Call the OpenAI Codex CLI from this machine as a second AI: an ind
 > registry) + `bin/codex-run.sh` (the single entry point) +
 > `bin/codex-snapshot.sh` (the git snapshot) + two test suites. Earlier versions
 > of this skill all failed the same way: the prose drifted from the verified
-> mechanism. Now there is nothing to drift — a script assembles the command, and
-> the registry generates the route table. The findings that shaped each rule are
-> in `reference/findings.md`.
+> mechanism. Two things can no longer drift — a script assembles the command, and
+> the registry generates the route table between the `ROUTES` markers. The rest
+> of this file is written by hand and drifts like any prose: the first review
+> after 1.0.0 found six paragraphs describing guarantees the code did not give.
+> Treat a sentence here as a claim to check, not as the mechanism. The findings
+> that shaped each rule are in `reference/findings.md`.
 
 The Codex CLI must be installed and logged in (`codex login`). A ChatGPT
 subscription login is enough; `OPENAI_API_KEY` is neither set nor needed — the
@@ -265,10 +268,15 @@ several background calls in flight, "the last session" will be somebody else's.
 
 Claude leads: decides, edits code, owns the result. Codex assists: reads,
 criticises, judges independently, generates bitmaps. **Codex does not edit
-project files.** That is enforced by mechanism, not by wording: every route
-except the image ones carries `sandbox: read-only` in the registry, and a request
-cannot override it. On the image routes, `-C` points at an asset directory, not
-at a project root.
+project files.** For every route except the image ones that is enforced by
+mechanism, not by wording: the registry carries `sandbox: read-only` and a
+request cannot override it.
+
+The image routes are the exception, and there the discipline is yours, not the
+runner's. They carry `workspace-write`, and the runner passes whatever directory
+the request names — it checks that `dir` exists and nothing else. Point `-C` at
+an asset directory. Point it at a project root and the model may write anywhere
+inside it.
 
 Both tools run on one machine and see one disk, so projects are never uploaded:
 Claude names a path and Codex reads it itself.
@@ -278,6 +286,13 @@ Claude names a path and Codex reads it itself.
 1. `~/.codex/AGENTS.md` — global, always loaded (including under
    `--ignore-user-config`). This is what makes Codex a sceptic; the runner greps
    it for the anchor phrase before the first call.
+
+   Throughout this file `~/.codex` names the default location. Set `CODEX_HOME`
+   and everything moves with it: Codex itself, `install.sh`, the runner and
+   `check-all.sh` all resolve `${CODEX_HOME:-~/.codex}`, so they cannot disagree
+   about which `AGENTS.md` or profile is the real one. It must be an absolute
+   path — a relative one would mean a different directory for every process
+   that resolved it, and the scripts refuse it rather than guess.
 2. `AGENTS.md` in the `-C` directory — **and in directories above it.** The
    runner checks this on **every** call and prints a warning.
 3. The call's prompt — **the weakest layer**: instructions in `AGENTS.md`
@@ -370,7 +385,9 @@ tell them apart.
 `finished` after. `codex_rc`, `out_size` and `runner_rc` are separate fields —
 otherwise "Codex crashed" and "Codex returned 0 but the file is empty" would be
 indistinguishable. An orphaned `started` with no `finished` means a killed or
-hung call.
+hung call. If the log cannot be written at all, the call still runs — a verdict
+is worth more than its bookkeeping — but the runner says so on stderr rather
+than leaving a gap that reads like "no call was made".
 
 > **The log is per machine, not per session.** It holds calls from every agent
 > session running in parallel, so `grep -c started` yields a meaningless number
@@ -412,6 +429,21 @@ wrongly reused in a neighbouring project.
 
 - **There is no read boundary at all.** `-C` sets the working root; the sandbox
   restricts writing. Secret protection is behavioural, not enforced.
+- **`CODEX_HOME` is checked for shape, not for agreement.** The guard rejects a
+  relative value, which is the case that actually bites. It cannot verify that
+  bash and Codex resolve the same absolute string to the same directory: under
+  MSYS a POSIX path is normally translated on its way to a native process, and a
+  user who disables that translation for this variable makes the two disagree
+  again. That is a property of the environment, not something a shell function
+  can settle — if you have set `MSYS2_ENV_CONV_EXCL`, you own the consequences.
+- **The gates live in the snapshot step, not in the call path.** `codex-run.sh`
+  validates the request; it does not scan the tree and does not invoke
+  `codex-snapshot.sh`. A route aimed straight at a directory therefore reaches
+  it with no gate in between — the gates protect the review workflow because
+  that workflow builds a snapshot first, not because the runner enforces them.
+  Verified by dry run: `route=review` on a repository holding a plain `.env`
+  produced `-C <repo>` and no refusal, while `codex-snapshot.sh` on the same
+  repository stopped with exit 2.
 - **The secret gate is not omniscient.** It checks names, and the content of
   added lines by format (keys, tokens, JWTs, long literal assignments). It will
   not catch: a secret in base64 or another encoding, a short password with no
@@ -443,7 +475,8 @@ wrongly reused in a neighbouring project.
 - **The built-in `review` explores the repository on its own**; it is not
   confined to the diff you point it at.
 - **A project config outranks the profile.** `--ignore-user-config` does not
-  disable `<dir>/.codex/config.toml`. The runner warns when it finds one.
+  disable `<dir>/.codex/config.toml`. The runner refuses the call with exit 2
+  when it finds one — read the file yourself and decide deliberately.
 - **`--ignore-user-config` does not disable Codex plugin skills.** Verified: a
   plugin skill loaded and used its MCP tools on a route carrying that flag. The
   flag is about configuration, not about what the model may reach for. A plugin
@@ -454,12 +487,15 @@ wrongly reused in a neighbouring project.
 - **The content gate cannot see inside a binary.** git prints `Binary files
   differ` rather than bytes. The snapshot NAMES the binary files it could not
   scan, but naming them is all it can do.
-- **The name gate reads the file list line by line** (`ls-files` without `-z`).
-  A filename containing a control character would in principle split the line.
-  On Windows the case is unreachable — the OS strips such characters, so
-  `secr\net` simply becomes `secret` — and git escapes control characters inside
-  quotes regardless of `core.quotepath`. On a POSIX filesystem, where such names
-  are creatable, this remains a hole: switch the gate to `-z` there.
+- **The name gate reads the file list line by line** (`ls-files` without `-z`),
+  so a filename containing a control character would in principle split the
+  line. It does not get that far: git C-quotes such a name, and the gate refuses
+  any quoted name outright with exit 2 rather than trying to parse the escaping.
+  The case is unreachable on Windows — the OS remaps such characters — and
+  `test-snapshot.sh` exercises it on POSIX, where the name is creatable. The
+  limitation that remains is milder than a hole: a repository holding one of
+  these names cannot be reviewed through the snapshot at all until it is
+  renamed.
 - **Codex's execution policy rejects some commands.** In practice that is dozens
   of rejections per run, mostly long shell one-liners. This is why the templates
   ask it to name the commands it was not allowed to run: otherwise "checked" and

@@ -175,14 +175,23 @@ if command -v codex >/dev/null 2>&1; then
   else no "version $V, but the facts here were verified on $E -- re-run both suites, re-check the CLI help, then update bin/expected-codex-version.txt"; fi
   codex login status 2>&1 | grep -qi 'logged in' && ok "logged in" || no "not logged in -- run: codex login"
   ANCHOR=$(cat "$BIN/agents-anchor.txt" 2>/dev/null || printf 'Look for what breaks')
-  grep -qF -- "$ANCHOR" "$HOME/.codex/AGENTS.md" 2>/dev/null \
-    && ok "reviewer instruction present in ~/.codex/AGENTS.md" \
-    || no "~/.codex/AGENTS.md missing or lacks the reviewer instruction -- run install.sh"
-  [ -f "$HOME/.codex/claude-safe.config.toml" ] \
-    && ok "claude-safe profile present" || no "missing ~/.codex/claude-safe.config.toml -- run install.sh"
-  grep -q '^\[agents\]' "$HOME/.codex/config.toml" 2>/dev/null \
-    && ok "[agents] present (fanout route usable)" \
-    || printf '  .    no [agents] in ~/.codex/config.toml -- the fanout route will not fan out\n'
+  # Codex honours CODEX_HOME and so does install.sh; looking only in ~/.codex
+  # reported a correct install as broken whenever one was set. A relative value
+  # is refused, not resolved: it would name a different directory for every
+  # process, and this check would pass or fail on the caller's cwd.
+  CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+  compat_is_absolute "$CODEX_DIR" \
+    || { no "CODEX_HOME must be an absolute path (got '$CODEX_DIR')"; CODEX_DIR=''; }
+  if [ -n "$CODEX_DIR" ]; then
+    grep -qF -- "$ANCHOR" "$CODEX_DIR/AGENTS.md" 2>/dev/null \
+      && ok "reviewer instruction present in $CODEX_DIR/AGENTS.md" \
+      || no "$CODEX_DIR/AGENTS.md missing or lacks the reviewer instruction -- run install.sh"
+    [ -f "$CODEX_DIR/claude-safe.config.toml" ] \
+      && ok "claude-safe profile present" || no "missing $CODEX_DIR/claude-safe.config.toml -- run install.sh"
+    grep -q '^\[agents\]' "$CODEX_DIR/config.toml" 2>/dev/null \
+      && ok "[agents] present (fanout route usable)" \
+      || printf '  .    no [agents] in %s/config.toml -- the fanout route will not fan out\n' "$CODEX_DIR"
+  fi
 else no "codex is not in PATH -- there is no bridge"; fi
 
 if [ "${1-}" = --live ]; then

@@ -351,6 +351,43 @@ bash "$CONS" "$CREQ" "$EVIL" >/dev/null 2>&1
 bash "$CONS" "$CREQ" plan >/dev/null 2>&1
 [ $? -eq 2 ] && ok "review+plan (both terra/high) refused" || bad "identical models" "not refused"
 
+# One model at two efforts is still one model. The pair above shares BOTH fields,
+# so it passed whether the check compared the slug or "slug/effort" -- which is
+# why the weaker comparison survived until a dry run showed review-critical
+# (sol/xhigh) and plan-critical (sol/max) being accepted as independent. Extra
+# effort buys more findings from the same weights, not a second opinion.
+printf 'route=review-critical\ndir=%s/cd\nout_dir=%s/co\nsubject=t\nprompt_file=%s/cp\nschema=%s/reference/review-schema.json\nconfirm_background=yes\n' \
+  "$T" "$T" "$T" "$(cd "$BIN/.." && pwd)" > "$T/cons2.conf"
+# DRYRUN because a regression here means the pair is ACCEPTED, and an accepted
+# pair goes on to call Codex twice for real -- a failing test must not spend
+# quota. The message is asserted, not just rc=2: a missing node, an unreadable
+# schema or an empty registry field all exit 2 as well, and a test that cannot
+# tell them apart would report a green tick for the wrong reason.
+cons_out=$(CODEX_RUN_DRYRUN=1 bash "$CONS" "$T/cons2.conf" plan-critical 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$cons_out" | grep -q 'both run gpt-5.6-sol'; } \
+  && ok "one model at two efforts refused, and for that reason" \
+  || bad "same model, different effort" "rc=$rc first line: $(printf '%s' "$cons_out" | head -1)"
+
+# The same guard one step earlier, on a COPY so the production registry is never
+# touched: a route whose `model` line is missing must stop the run rather than
+# compare an empty slug against a real one and call it independence.
+CC="$T/consbin"; mkdir -p "$CC"
+cp "$BIN/codex-consensus.sh" "$BIN/codex-run.sh" "$BIN/compat.sh" "$CC/"
+awk '/^route: plan-critical$/{p=1; print; next} p&&/^model: /{next} /^route: /{p=0} {print}' "$REG" > "$CC/routes.conf"
+cons_out=$(CODEX_RUN_DRYRUN=1 bash "$CC/codex-consensus.sh" "$T/cons2.conf" plan-critical 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$cons_out" | grep -q 'no model'; } \
+  && ok "a route with no model in the registry is refused before any call" \
+  || bad "empty model slug" "rc=$rc first line: $(printf '%s' "$cons_out" | head -1)"
+
+# ...and the same for a model line that is present but blank. "   " is non-empty,
+# so a bare -n test called it a model, found it different from the real slug, and
+# started both runs -- paying for the first before the runner rejected the second.
+awk '/^route: plan-critical$/{p=1; print; next} p&&/^model: /{print "model:   "; next} /^route: /{p=0} {print}' "$REG" > "$CC/routes.conf"
+cons_out=$(CODEX_RUN_DRYRUN=1 bash "$CC/codex-consensus.sh" "$T/cons2.conf" plan-critical 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$cons_out" | grep -q 'no model'; } \
+  && ok "a blank model line is refused before any call" \
+  || bad "whitespace model slug" "rc=$rc first line: $(printf '%s' "$cons_out" | head -1)"
+
 # Nonexistent route
 bash "$CONS" "$CREQ" nosuchroute >/dev/null 2>&1
 [ $? -eq 2 ] && ok "nonexistent second route refused" || bad "nonexistent route" "-"
@@ -645,6 +682,37 @@ rc=$?
 deg=$(node -e 'try{const fs=require("fs");console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).consensus.degraded)}catch(e){console.log("ERR")}' "$T/relout/r.json" 2>/dev/null)
 { [ "$rc" -eq 0 ] && [ "$deg" = false ]; } && ok "a relative output path is read back correctly" \
   || bad "relative output path" "rc=$rc degraded=$deg"
+
+echo
+echo "== 7g2. What counts as an absolute CODEX_HOME is platform-dependent =="
+# The first version of this guard accepted a drive-letter path everywhere. On
+# Linux, macOS and WSL "C:/tmp" is not absolute at all -- it is a directory named
+# "C:" relative to the cwd -- so the guard would have passed exactly the value it
+# exists to reject. The assertion is therefore conditional on the platform, which
+# is the only way one suite can run on all three CI runners.
+abs_case() {                        # <value> <expected: yes|no> <name>
+  got=$( . "$BIN/compat.sh"; compat_is_absolute "$1" && printf yes || printf no )
+  [ "$got" = "$2" ] && ok "$3" || bad "$3" "expected $2, got $got"
+}
+abs_case "/etc/codex"        yes "a POSIX absolute path is absolute"
+abs_case "//server/share"    yes "a UNC path is absolute"
+abs_case "codex-home"        no  "a bare name is not absolute"
+abs_case "./codex-home"      no  "a dot-relative path is not absolute"
+abs_case '~/codex'           no  "an unexpanded tilde is not absolute"
+abs_case ""                  no  "an empty value is not absolute"
+BS='\'
+UNC="$BS${BS}server${BS}share"              # two leading backslashes, built not written
+abs_case "${BS}single"       no  "a single leading backslash is not a UNC path"
+case ${OSTYPE:-$(uname -s)} in
+  msys*|cygwin*|win32*|MINGW*|MSYS*|CYGWIN*)
+    abs_case 'C:/codex' yes "a drive path is absolute where drives exist"
+    abs_case 'C:\codex' yes "a backslash drive path is absolute where drives exist"
+    abs_case "$UNC"     yes "a backslash UNC path is absolute where drives exist" ;;
+  *)
+    abs_case 'C:/codex' no  "a drive path is NOT absolute on this platform"
+    abs_case 'C:\codex' no  "a backslash drive path is NOT absolute on this platform"
+    abs_case "$UNC"     no  "a backslash UNC path is NOT absolute on this platform" ;;
+esac
 
 echo
 echo "== 7h. Portability layer: the timeout contract =="

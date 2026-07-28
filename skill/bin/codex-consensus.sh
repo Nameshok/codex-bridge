@@ -75,9 +75,12 @@ if [ "$MERGE_ONLY" = 0 ]; then
   [ "$ROUTE1" = "$ROUTE2" ] && die "both routes are '$ROUTE1' -- that is a repeat, not an independent check"
 
   # A route NAME guarantees nothing: `review` and `plan` are both terra/high.
-  # Compare the MODEL and EFFORT from the registry, otherwise "consensus of two
-  # models" would be a lie exactly where the mechanism is supposed to reduce
-  # invented findings.
+  # Compare the MODEL SLUG from the registry, otherwise "consensus of two models"
+  # would be a lie exactly where the mechanism is supposed to reduce invented
+  # findings. Comparing model+effort was not enough: `review-critical` (sol/xhigh)
+  # and `plan-critical` (sol/max) differ as strings while running one model, and
+  # that pair passed as independent until a dry run caught it. Raising the effort
+  # buys more findings from the SAME weights -- it does not buy a second opinion.
   [ -f "$REG" ] || die "registry not found: $REG"
   route_field() {
     awk -v r="route: $1" -v f="$2: " '
@@ -87,9 +90,22 @@ if [ "$MERGE_ONLY" = 0 ]; then
   for R in "$ROUTE1" "$ROUTE2"; do
     grep -qxF "route: $R" "$REG" || die "route '$R' is not in the registry"
   done
-  M1="$(route_field "$ROUTE1" model)/$(route_field "$ROUTE1" effort)"
-  M2="$(route_field "$ROUTE2" model)/$(route_field "$ROUTE2" effort)"
-  [ "$M1" = "$M2" ] && die "routes '$ROUTE1' and '$ROUTE2' use the same $M1 -- no independence, this is a repeat"
+  MODEL1=$(route_field "$ROUTE1" model)
+  MODEL2=$(route_field "$ROUTE2" model)
+  # Fail closed on a registry that cannot answer the question. `route_field`
+  # returns an empty string for a missing field, and an empty slug compares
+  # unequal to a real one -- so a truncated route entry read as "independent"
+  # and both runs started. The runner refused afterwards, by which point the
+  # first call had already been spent. Decide before spending anything.
+  # Non-empty is not enough: `model:` followed by spaces yields "   ", which is
+  # non-empty, compares unequal to a real slug, and let both runs start again --
+  # the first one paid for before the runner rejected the second. Require at
+  # least one non-blank character.
+  case $MODEL1 in *[![:space:]]*) ;; *) die "route '$ROUTE1' is incomplete: the registry gives it no model" ;; esac
+  case $MODEL2 in *[![:space:]]*) ;; *) die "route '$ROUTE2' is incomplete: the registry gives it no model" ;; esac
+  M1="$MODEL1/$(route_field "$ROUTE1" effort)"
+  M2="$MODEL2/$(route_field "$ROUTE2" effort)"
+  [ "$MODEL1" = "$MODEL2" ] && die "routes '$ROUTE1' and '$ROUTE2' both run $MODEL1 -- a different effort is not a different model, so this is a repeat, not an independent check"
   say "consensus: $ROUTE1 ($M1) vs $ROUTE2 ($M2)"
 
   REQ2=$(compat_mktemp) || die "mktemp failed" 1

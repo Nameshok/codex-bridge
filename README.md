@@ -11,7 +11,7 @@ that wrote the code cannot review it honestly — it inherits its own assumption
 A different vendor's model does not.
 
 ```bash
-git clone https://github.com/<owner>/codex-bridge
+git clone https://github.com/Nameshok/codex-bridge
 cd codex-bridge
 bash install.sh
 ```

@@ -46,7 +46,7 @@ it. That path is recorded in `skill/reference/findings.md`.
 - **Generated documentation**: the route table in `SKILL.md` is produced from the
   registry by `gen-routes-table.sh`, and `--check` fails the test suite if the
   two drift apart.
-- **206 regression tests** (126 route, 80 snapshot) that run without a Codex
+- **207 regression tests** (127 route, 80 snapshot) that run without a Codex
   subscription.
 - **`install.sh`** with `--check` and `--uninstall`. It never overwrites an
   existing config file; where one exists and lacks what the project needs, it

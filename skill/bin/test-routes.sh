@@ -258,7 +258,11 @@ done
 # Write a log line with the REAL function: pull it out of the runner without calling Codex.
 ( CALL_ID=TEST; LOG_DIR="$T"; LOG="$T/j.jsonl"
   # shellcheck disable=SC1090
-  source <(sed -n '/^json_escape()/,/^}/p;/^log_event()/,/^}/p' "$RUN")
+  # One -e per range, not two ranges joined by ';'. BSD sed (macOS) rejects the
+  # joined form, the extraction produced nothing, and the sourced file defined no
+  # functions -- "log_event: command not found", five times, and a red suite.
+  # shellcheck disable=SC1090
+  source <(sed -n -e '/^json_escape()/,/^}/p' -e '/^log_event()/,/^}/p' "$RUN")
   for s in '--' '-' '1-2' '0' 'quote " backslash \ tab	end'; do log_event t subject "$s" n 5; done )
 if command -v node >/dev/null 2>&1 && [ -f "$T/j.jsonl" ]; then
   node -e '
@@ -649,14 +653,25 @@ COMPAT_TIMEOUT_KIND=builtin            # force the fallback, even where timeout(
 compat_timeout 1 sleep 10;       printf 'hung=%s\n' $?
 compat_timeout 5 true;           printf 'fast=%s\n' $?
 compat_timeout 5 sh -c 'exit 7'; printf 'fail=%s\n' $?
+# stdin must survive the fallback. An asynchronous command with no explicit
+# redirection gets /dev/null when job control is off, so the prompt reached
+# Codex empty on every system without timeout(1) -- and the reviewer answered
+# about nothing. Invisible on Linux and Windows, where timeout(1) exists, so
+# it is pinned here in the exact form the runner uses: stdin from a FILE with
+# stdout redirected. A pipe alone does not reproduce it.
+printf 'STDIN-MARKER\n' > "$2/in.txt"
+compat_timeout 5 cat < "$2/in.txt" > "$2/out.txt" 2>/dev/null
+printf 'stdin=%s\n' "$(cat "$2/out.txt" 2>/dev/null)"
 PROBE
-P=$(bash "$T/compat-probe.sh" "$BIN" 2>/dev/null)
+P=$(bash "$T/compat-probe.sh" "$BIN" "$T" 2>/dev/null)
 case $P in *hung=124*) ok "fallback timeout returns 124, as timeout(1) does" ;;
            *) bad "fallback timeout code" "got: $(printf '%s' "$P" | tr '\n' ' ')" ;; esac
 case $P in *fast=0*)   ok "fallback passes through a success" ;;
            *) bad "fallback success code" "got: $(printf '%s' "$P" | tr '\n' ' ')" ;; esac
 case $P in *fail=7*)   ok "fallback passes through the command's own exit code" ;;
            *) bad "fallback failure code" "got: $(printf '%s' "$P" | tr '\n' ' ')" ;; esac
+case $P in *stdin=STDIN-MARKER*) ok "fallback keeps stdin: the prompt reaches the command" ;;
+           *) bad "fallback loses stdin" "the prompt would arrive empty wherever timeout(1) is absent" ;; esac
 
 # bash 3.2 compatibility cannot be proved by running under bash 5, and stock
 # macOS is exactly where it matters. A static check is the honest substitute:
@@ -701,7 +716,13 @@ CA=$(bash "$SP/bin/check-all.sh" --scan-only 2>&1 | grep -c 'eval called in')
 # interrupted run once left a process tree multiplying for three hours.
 # A FULL check-all is invoked here, deliberately: if the guard is ever removed,
 # this case is what hangs, and it hangs immediately rather than in production.
-GUARD=$(CODEX_BRIDGE_IN_SUITE=1 timeout 60 bash "$SP/bin/check-all.sh" 2>&1 | grep -c 'recursion guard')
+# Through compat_timeout, not timeout(1): this was the one direct call to
+# timeout left in the suites, and a stock macOS has no such binary -- the
+# command never ran, the guard was never printed, and the case failed on the
+# platform the portability layer exists for.
+GUARD=$( . "$SP/bin/compat.sh"
+         CODEX_BRIDGE_IN_SUITE=1 compat_timeout 60 bash "$SP/bin/check-all.sh" 2>&1 \
+           | grep -c 'recursion guard' )
 [ "$GUARD" -ge 1 ] && ok "check-all refuses to run the suites from inside a suite" \
                    || bad "recursion guard missing" "check-all would re-enter itself without end"
 

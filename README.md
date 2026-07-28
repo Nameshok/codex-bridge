@@ -44,7 +44,7 @@ takes over. Nothing else is required.
 | **Read-only by default** | Every reviewing route is `sandbox: read-only`, and a request cannot override it. Only the image routes can write, and only into the directory you point them at. |
 | **Consensus mode** | Two independent runs with different models, findings mechanically split into "both saw this" and "only one saw this". A priority order for your attention, not a proof. |
 | **Named failures** | An exhausted quota, a dropped login and a network fault all look like "exit 1". The runner classifies the transcript and tells you which one it was — and says `UNKNOWN` rather than guessing when the evidence is ambiguous. |
-| **206 regression tests** | They run without a Codex subscription. |
+| **207 regression tests** | They run without a Codex subscription. |
 
 ## Try it
 
@@ -88,7 +88,7 @@ skill/
     compat.sh                    GNU/BSD differences, missing timeout
     check-all.sh                 "is this installation sound?"
     gen-routes-table.sh          registry -> the table in SKILL.md
-    test-routes.sh              126 tests
+    test-routes.sh              127 tests
     test-snapshot.sh             80 tests
   reference/                     prompt templates, schema, findings, measurements
 ```

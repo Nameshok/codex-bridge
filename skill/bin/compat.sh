@@ -68,7 +68,14 @@ compat_timeout() {
   # Emptiness is the signal instead: mktemp leaves it empty, the watchdog
   # appends a byte.
   local flag; flag=$(compat_mktemp) || return 125
-  "$@" &
+  # `<&0` is not a no-op here. POSIX and bash redirect the standard input of an
+  # ASYNCHRONOUS command to /dev/null when job control is off "in the absence of
+  # any explicit redirections" -- which is the case in every non-interactive
+  # script. Without this the command ran with an empty stdin, so on any system
+  # without timeout(1) (a stock macOS) the prompt never reached Codex at all and
+  # the reviewer answered about nothing. Verified by reproducing the exact form
+  # the runner uses: `compat_timeout N cmd < file > capture`.
+  "$@" <&0 &
   local cmd_pid=$! watch_pid rc
   ( sleep "$secs"
     printf 'x' >> "$flag"

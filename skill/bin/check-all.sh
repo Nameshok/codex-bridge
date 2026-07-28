@@ -126,11 +126,28 @@ bash "$BIN/gen-routes-table.sh" --check >/dev/null 2>&1 \
   || no "table has drifted -- run: bash bin/gen-routes-table.sh --write"
 
 step "Regression suites"
+# RECURSION GUARD. check-all runs the suites, and a suite has a case that runs
+# check-all -- without this marker the two call each other forever, each level
+# creating a new temp tree. That is not hypothetical: an interrupted run left a
+# tree of processes that kept multiplying for three hours before anyone noticed,
+# because killing the parent does not kill the children.
+#
+# --scan-only exists for the same reason and is the right way for a test to
+# reach this file; the marker is the belt to that pair of braces, and it holds
+# no matter how check-all is invoked.
+if [ -n "${CODEX_BRIDGE_IN_SUITE:-}" ]; then
+  printf '  .    skipped: already running inside a suite (recursion guard)\n'
+  SKIP_SUITES=1
+else
+  SKIP_SUITES=0
+fi
 # The EXIT CODE is checked, not a substring of the last line: a suite that dies
 # halfway prints no summary at all, and a broken suite could print anything.
 run_suite() {
   local o rc last
-  o=$(bash "$1" 2>&1); rc=$?
+  # The marker is exported into the suite, so anything the suite starts -- and
+  # anything that starts -- inherits it.
+  o=$(CODEX_BRIDGE_IN_SUITE=1 bash "$1" 2>&1); rc=$?
   last=$(printf '%s\n' "$o" | tail -1)
   if [ "$rc" -eq 0 ] && printf '%s\n' "$last" | grep -q 'failed 0'; then
     ok "$2: $last"
@@ -139,8 +156,10 @@ run_suite() {
     printf '%s\n' "$o" | grep -E '^  FAIL' | head -5 | sed 's/^/      /'
   fi
 }
+if [ "$SKIP_SUITES" = 0 ]; then
 run_suite "$BIN/test-routes.sh"   "routes"
 run_suite "$BIN/test-snapshot.sh" "snapshot"
+fi
 
 step "Codex environment"
 if command -v codex >/dev/null 2>&1; then

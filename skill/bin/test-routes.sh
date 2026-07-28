@@ -596,6 +596,16 @@ CA=$(bash "$SP/bin/check-all.sh" --scan-only 2>&1 | grep -c 'eval called in')
 [ "$CA" -ge 1 ] && ok "a planted eval is reported even from a path containing a space" \
                 || bad "the construct scan read nothing" "a real eval went unreported"
 
+# The recursion guard, which is the reason --scan-only exists. check-all runs
+# the suites; this suite runs check-all. Without the marker the two call each
+# other forever, and killing the parent does not stop the children -- an
+# interrupted run once left a process tree multiplying for three hours.
+# A FULL check-all is invoked here, deliberately: if the guard is ever removed,
+# this case is what hangs, and it hangs immediately rather than in production.
+GUARD=$(CODEX_BRIDGE_IN_SUITE=1 timeout 60 bash "$SP/bin/check-all.sh" 2>&1 | grep -c 'recursion guard')
+[ "$GUARD" -ge 1 ] && ok "check-all refuses to run the suites from inside a suite" \
+                   || bad "recursion guard missing" "check-all would re-enter itself without end"
+
 echo
 echo "== 8. The SKILL.md route table is in sync with the registry =="
 if bash "$BIN/gen-routes-table.sh" --check >/dev/null 2>&1; then ok "gen-routes-table --check"

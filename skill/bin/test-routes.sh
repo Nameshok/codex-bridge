@@ -258,11 +258,15 @@ done
 # Write a log line with the REAL function: pull it out of the runner without calling Codex.
 ( CALL_ID=TEST; LOG_DIR="$T"; LOG="$T/j.jsonl"
   # shellcheck disable=SC1090
-  # One -e per range, not two ranges joined by ';'. BSD sed (macOS) rejects the
-  # joined form, the extraction produced nothing, and the sourced file defined no
-  # functions -- "log_event: command not found", five times, and a red suite.
+  # Extract to a FILE, then source the file. `source <(...)` is not reliable on
+  # bash 3.2 (stock macOS): bash closes the process substitution before sed has
+  # finished writing, sed dies with "stdout: Broken pipe", and the functions are
+  # only partly defined or not defined at all -- "log_event: command not found",
+  # five times, on macOS only. One -e per range as well: BSD sed rejects two
+  # ranges joined by ';'.
   # shellcheck disable=SC1090
-  source <(sed -n -e '/^json_escape()/,/^}/p' -e '/^log_event()/,/^}/p' "$RUN")
+  sed -n -e '/^json_escape()/,/^}/p' -e '/^log_event()/,/^}/p' "$RUN" > "$T/fns.sh"
+  source "$T/fns.sh"
   for s in '--' '-' '1-2' '0' 'quote " backslash \ tab	end'; do log_event t subject "$s" n 5; done )
 if command -v node >/dev/null 2>&1 && [ -f "$T/j.jsonl" ]; then
   node -e '

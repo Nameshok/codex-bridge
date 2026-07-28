@@ -1,0 +1,90 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["coverage", "findings", "overall"],
+  "properties": {
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewed", "skipped", "unverified", "blocked_commands"],
+      "properties": {
+        "reviewed": {
+          "type": "array",
+          "description": "Paths of the files that were actually read and analysed",
+          "items": { "type": "string" }
+        },
+        "blocked_commands": {
+          "type": "array",
+          "description": "Commands you could not run (rejected by the execution policy or the environment). An empty list means everything you needed to run did run",
+          "items": { "type": "string" }
+        },
+        "skipped": {
+          "type": "array",
+          "description": "What you deliberately did not look at, and why",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "why"],
+            "properties": {
+              "path": { "type": "string" },
+              "why": { "type": "string" }
+            }
+          }
+        },
+        "unverified": {
+          "type": "array",
+          "description": "Claims you could not confirm against the code",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "An empty list is a legitimate answer: it means you have no objections",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "line", "locator", "severity", "confidence", "claim", "why", "check"],
+        "properties": {
+          "file": {
+            "type": ["string", "null"],
+            "description": "Path to the file; null if the finding is not tied to one (for example, missing tests)"
+          },
+          "line": {
+            "type": ["integer", "null"],
+            "description": "Line number; null where there are no lines (a layout, a spreadsheet, an image) or the finding is not tied to a line"
+          },
+          "locator": {
+            "type": ["string", "null"],
+            "description": "A precise pointer where no line number exists: page, slide, cell, layer, timecode, item number, quotation. null if file+line is enough"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["blocker", "major", "minor", "nit"]
+          },
+          "confidence": {
+            "type": "string",
+            "description": "certain = reproducible from the code; hypothesis = needs checking",
+            "enum": ["certain", "hypothesis"]
+          },
+          "claim": { "type": "string", "description": "What exactly will break, in one sentence" },
+          "why": { "type": "string", "description": "The mechanism of the failure: input, state, outcome" },
+          "check": { "type": "string", "description": "How to verify this claim in under a minute" }
+        }
+      }
+    },
+    "overall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "summary"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "description": "ok = no objections; fix-required = something must be fixed before delivery; rework = it needs redoing substantively. Neutral to the kind of work: applies to code as well as to prose, layouts and estimates",
+          "enum": ["ok", "fix-required", "rework"]
+        },
+        "summary": { "type": "string" }
+      }
+    }
+  }
+}

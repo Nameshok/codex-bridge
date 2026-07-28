@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No Codex subscription is needed to test this project. A stub on PATH
+      # answers --version and `login status`; everything else in the suites runs
+      # through the dry-run path, which never calls Codex at all.
+      - name: Install a stub codex
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/stubbin"
+          VER=$(cat skill/bin/expected-codex-version.txt)
+          cat > "$RUNNER_TEMP/stubbin/codex" <<STUB
+          #!/usr/bin/env bash
+          case "\$*" in
+            *--version*)      echo "$VER"; exit 0 ;;
+            *"login status"*) echo "Logged in using ChatGPT" >&2; exit 0 ;;
+          esac
+          printf '%s\n' "\${FAKE_CODEX_ERR:-error: something}" >&2
+          exit "\${FAKE_CODEX_RC:-1}"
+          STUB
+          chmod +x "$RUNNER_TEMP/stubbin/codex"
+          echo "$RUNNER_TEMP/stubbin" >> "$GITHUB_PATH"
+
+      - name: Shell syntax
+        run: |
+          set -eu
+          for f in install.sh skill/bin/*.sh; do bash -n "$f"; done
+          echo "all scripts parse"
+
+      # git needs an identity before the snapshot suite can commit anything.
+      - name: Configure git
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name  ci
+          git config --global init.defaultBranch main
+
+      - name: Route suite
+        run: bash skill/bin/test-routes.sh
+
+      - name: Snapshot suite
+        run: bash skill/bin/test-snapshot.sh
+
+      - name: Generated table matches the registry
+        run: bash skill/bin/gen-routes-table.sh --check
+
+      # End-to-end: install into a throwaway HOME exactly as a new user would,
+      # then let the installer's own health check decide whether it worked.
+      - name: Install into a clean profile
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/fakehome"
+          mkdir -p "$HOME"
+          bash install.sh
+
+      # Running it twice must be safe: the second run finds everything present,
+      # keeps the existing config files, and still reports a sound installation.
+      - name: Install is idempotent
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/fakehome"
+          bash install.sh
+          bash "$HOME/.claude/skills/codex-bridge/bin/check-all.sh"
+
+      - name: Uninstall removes the skill
+        run: |
+          set -eu
+          export HOME="$RUNNER_TEMP/fakehome"
+          bash install.sh --uninstall
+          test ! -d "$HOME/.claude/skills/codex-bridge"
+          test -f "$HOME/.codex/AGENTS.md"   # Codex config is deliberately kept
+          echo "uninstall left the Codex configuration alone, as documented"
+
+  ascii:
+    name: executables are pure ASCII
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A typographic dash inside a printed string turns into mojibake on a
+      # console that is not UTF-8. Documentation may use them; code may not.
+      - name: Scan
+        run: |
+          set -eu
+          bad=0
+          for f in install.sh skill/bin/*.sh skill/bin/routes.conf; do
+            if LC_ALL=C grep -n $'[\x80-\xff]' "$f"; then
+              echo "^^ non-ASCII byte in $f"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] && echo "all executables are pure ASCII"
+          exit "$bad"

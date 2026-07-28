@@ -1,0 +1,9 @@
+# Runtime state, created by the skill on the machine it runs on.
+skill/var/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -167,7 +167,12 @@ if command -v codex >/dev/null 2>&1; then
   E=$(cat "$BIN/expected-codex-version.txt" 2>/dev/null || printf '')
   if [ -z "$E" ]; then ok "version $V (no pin recorded)"
   elif [ "$V" = "$E" ]; then ok "version matches the verified one: $V"
-  else printf '  !    version %s, but the facts here were verified on %s -- re-run the suites\n' "$V" "$E"; fi
+  # A mismatch is a FAILURE, not a note. The closing line claims the kit is
+  # sound -- that its premises hold. On a different CLI version nothing confirms
+  # them, and flag behaviour is what the whole kit stands on. This used to print
+  # a note without touching FAIL, so after a Codex upgrade check-all still said
+  # "nothing failed" and exited 0.
+  else no "version $V, but the facts here were verified on $E -- re-run both suites, re-check the CLI help, then update bin/expected-codex-version.txt"; fi
   codex login status 2>&1 | grep -qi 'logged in' && ok "logged in" || no "not logged in -- run: codex login"
   ANCHOR=$(cat "$BIN/agents-anchor.txt" 2>/dev/null || printf 'Look for what breaks')
   grep -qF -- "$ANCHOR" "$HOME/.codex/AGENTS.md" 2>/dev/null \

@@ -439,21 +439,120 @@ FAKE_CODEX_RC=0 FAKE_CODEX_OUT='I could not run the scan; press Start scan.' \
   HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
 [ $? -ne 0 ] && ok "schema route refuses a non-JSON verdict" \
              || bad "schema route accepted prose" "this is the diverted-run false success"
+# Parseable is not enough. `{"findings":[]}` is valid JSON meaning "no
+# objections" -- a diverted run returning that used to pass as a clean review.
 FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"findings":[]}' \
   HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
-[ $? -eq 0 ] && ok "schema route accepts valid JSON" || bad "schema route rejected valid JSON" "-"
+[ $? -ne 0 ] && ok "JSON without coverage or a conclusion is refused" \
+             || bad "incomplete JSON accepted" "the schema requires coverage and overall"
+GOOD='{"coverage":{"reviewed":["a.sh"],"skipped":[],"unverified":[],"blocked_commands":[]},"findings":[],"overall":{"verdict":"ok","summary":"no objections"}}'
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT="$GOOD" \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "a verdict complete per the schema is accepted" || bad "complete verdict refused" "$GOOD"
+# A finding missing its required fields is the same lie one level deeper.
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"coverage":{"reviewed":["a.sh"],"skipped":[],"unverified":[],"blocked_commands":[]},"findings":[{"claim":"something is off"}],"overall":{"verdict":"ok","summary":"x"}}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "a finding without severity or a locator is refused" \
+             || bad "incomplete finding accepted" "the walk never reached the items of findings"
+# One missing field at a time, or the case above would stay green under an
+# implementation that checks severity and ignores locator entirely.
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"coverage":{"reviewed":["a.sh"],"skipped":[],"unverified":[],"blocked_commands":[]},"findings":[{"file":"a.sh","line":1,"severity":"minor","confidence":"certain","claim":"c","why":"w","check":"k"}],"overall":{"verdict":"ok","summary":"x"}}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "a finding missing only locator is refused" \
+             || bad "locator not required" "the test above passed on severity alone"
+# Required fields present, types wrong. Without a type check this passed, and
+# {"verdict":false,"summary":1} is structure without content.
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"coverage":{"reviewed":[1],"skipped":[],"unverified":[],"blocked_commands":[]},"findings":[],"overall":{"verdict":false,"summary":1}}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "right fields with wrong types are refused" \
+             || bad "types are not checked" "the walk only looks at required"
+# ["string","null"] unions are used by the schema itself and must keep passing.
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"coverage":{"reviewed":["a.sh"],"skipped":[],"unverified":[],"blocked_commands":[]},"findings":[{"file":null,"line":null,"locator":"item 3","severity":"minor","confidence":"hypothesis","claim":"c","why":"w","check":"k"}],"overall":{"verdict":"fix-required","summary":"s"}}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "null in [string,null] fields is accepted" \
+             || bad "type union refused" "a finding with no file and no line is legal per the schema"
+# An empty coverage.reviewed means nothing was read -- the exact shape of a
+# diverted run. Structurally the reply below is complete.
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"coverage":{"reviewed":[],"skipped":[],"unverified":[],"blocked_commands":[]},"findings":[],"overall":{"verdict":"ok","summary":"looks fine"}}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "an empty coverage.reviewed is refused" \
+             || bad "empty coverage accepted" "structurally complete, and nothing was read"
+# Unions on the array side: items must still be walked for ["array","null"].
+printf '{"type":"object","required":["names"],"properties":{"names":{"type":["array","null"],"items":{"type":"string"}}}}\n' > "$T/union-schema.json"
+printf 'route=review\ndir=%s/cd\nout_dir=%s/fo\nsubject=union schema\nprompt_file=%s/cp\nschema=%s/union-schema.json\n' \
+  "$T" "$T" "$T" "$T" > "$T/us.conf"
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"names":[1]}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/us.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "items are walked through an [array,null] union" \
+             || bad "union array items skipped" "sch.type===\"array\" is false for a union"
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"names":null}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/us.conf" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "null is still legal for that union" || bad "union null refused" "-"
+# minItems is honoured where a schema states it.
+printf '{"type":"object","required":["names"],"properties":{"names":{"type":"array","minItems":1,"items":{"type":"string"}}}}\n' > "$T/min-schema.json"
+printf 'route=review\ndir=%s/cd\nout_dir=%s/fo\nsubject=minItems\nprompt_file=%s/cp\nschema=%s/min-schema.json\n' \
+  "$T" "$T" "$T" "$T" > "$T/ms.conf"
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"names":[]}' \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/ms.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "minItems is enforced" || bad "minItems ignored" "-"
+# An unparseable schema file must fail closed as well.
+printf 'not json at all\n' > "$T/broken-schema.json"
+printf 'route=review\ndir=%s/cd\nout_dir=%s/fo\nsubject=broken schema\nprompt_file=%s/cp\nschema=%s/broken-schema.json\n' \
+  "$T" "$T" "$T" "$T" > "$T/bs.conf"
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT="$GOOD" \
+  HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/bs.conf" >/dev/null 2>&1
+[ $? -ne 0 ] && ok "an unparseable schema fails closed" \
+             || bad "broken schema passed" "a check that reports fine when it breaks"
 
 # No usable validator must FAIL CLOSED. "Could not check" reported as success is
 # the same shape of failure the check was added to catch.
 printf '#!/bin/sh\nexit 127\n' > "$T/fakepath/node"; chmod +x "$T/fakepath/node"
-FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"findings":[]}' \
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT="$GOOD" \
   HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
 [ $? -ne 0 ] && ok "schema route refuses when no validator is available" \
              || bad "no validator reported as success" "this is fail-open"
 rm -f "$T/fakepath/node"
-FAKE_CODEX_RC=0 FAKE_CODEX_OUT='{"findings":[]}' \
+FAKE_CODEX_RC=0 FAKE_CODEX_OUT="$GOOD" \
   HOME="$FHOME" PATH="$T/fakepath:$PATH" bash "$CB/codex-run.sh" "$T/schema.conf" >/dev/null 2>&1
 [ $? -eq 0 ] && ok "and passes again once the validator is back" || bad "validator removal was sticky" "-"
+
+echo
+echo "== 7d2. Switch fields: an enumeration, not a silent default =="
+# `ephemeral=yees` used to be accepted and silently mean "no": the value is
+# compared against `yes` when the flag is assembled, so a typo turned the
+# session persistent instead of stopping the call.
+req "$T/r.conf" route=review dir="$T/work" out_dir="$T/out" subject=typo \
+    prompt_file="$T/p.txt" ephemeral=yees
+expect_rc 2 "ephemeral with a typo is refused"
+req "$T/r.conf" route=review dir="$T/work" out_dir="$T/out" subject=ephemeral \
+    prompt_file="$T/p.txt" ephemeral=yes
+o=$(dry "$T/r.conf"); has "$o" --ephemeral && ok "ephemeral=yes produces --ephemeral" \
+  || bad "ephemeral=yes" "the flag is missing from argv"
+req "$T/r.conf" route=review dir="$T/work" out_dir="$T/out" subject=explicit-no \
+    prompt_file="$T/p.txt" ephemeral=no
+o=$(dry "$T/r.conf"); has "$o" --ephemeral && bad "ephemeral=no" "the flag is spurious" \
+  || ok "ephemeral=no adds no flag"
+# An explicitly empty value is a malformed value, not an omission: a non-empty
+# test would let it through and restore the silent default through the back door.
+req "$T/r.conf" route=review dir="$T/work" out_dir="$T/out" subject=empty \
+    prompt_file="$T/p.txt" ephemeral=
+expect_rc 2 "an empty ephemeral= is refused"
+req "$T/r.conf" route=review-critical dir="$T/work" out_dir="$T/out" subject=empty-bg \
+    prompt_file="$T/p.txt" confirm_background=
+expect_rc 2 "an empty confirm_background= is refused"
+# confirm_background must obey `allows` like every other field.
+req "$T/r.conf" route=ping dir="$T/work" out_dir="$T/out" subject=bg-on-foreground \
+    prompt_file="$T/p.txt" confirm_background=yes
+expect_rc 2 "confirm_background on a foreground route is refused"
+req "$T/r.conf" route=review-critical dir="$T/work" out_dir="$T/out" subject=bg \
+    prompt_file="$T/p.txt" confirm_background=yes
+expect_rc "$DRYRC" "confirm_background on a background route is accepted"
+# Image sessions pile up on disk, so the image routes have to accept ephemeral.
+req "$T/r.conf" route=image-draft dir="$T/assets" out_dir="$T/out" subject=image \
+    prompt_file="$T/p.txt" image="$T/a.png" ephemeral=yes confirm_background=yes
+o=$(dry "$T/r.conf"); rcg=$(rc_dry "$T/r.conf")
+{ [ "$rcg" = "$DRYRC" ] && has "$o" --ephemeral; } \
+  && ok "an image route accepts ephemeral" || bad "ephemeral on image-draft" "rc=$rcg"
 
 echo
 echo "== 7e. Registry: a repeated field inside one route is refused =="

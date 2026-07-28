@@ -63,7 +63,11 @@ if [ "$MERGE_ONLY" = 0 ]; then
   [ -f "$REQ" ] || die "request file not found: $REQ"
   command -v node >/dev/null 2>&1 || die "node is required to merge verdicts" 2
 
-  get_field() { grep -E "^$1=" "$REQ" | head -1 | cut -d= -f2-; }
+  # The trailing CR is stripped explicitly. A request file may use CRLF --
+  # codex-run.sh accepts that, so consensus has to as well, or the same request
+  # works through the runner and fails through consensus. Some greps strip the CR
+  # on their own; that is a property of the build, not a guarantee.
+  get_field() { local v; v=$(grep -E "^$1=" "$REQ" | head -1 | cut -d= -f2-); printf '%s' "${v%$'\r'}"; }
   ROUTE1=$(get_field route);   [ -n "$ROUTE1" ] || die "request has no route"
   valid_route "$ROUTE1" || die "route name '$ROUTE1' is not a plain identifier (A-Z a-z 0-9 _ -)"
   SCHEMA=$(get_field schema);  [ -n "$SCHEMA" ] || die "consensus needs structured output: set schema= in the request"

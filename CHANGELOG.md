@@ -28,13 +28,25 @@ it. That path is recorded in `skill/reference/findings.md`.
   proximity.
 - **Failure classification** — `RATE_LIMITED`, `AUTH`, `NO_SESSION`, `MODEL`,
   `NETWORK`, `GIT`, `TIMEOUT`, `EMPTY_VERDICT`, `BLANK_VERDICT`, `NOT_JSON`,
-  `NO_VALIDATOR`, `UNKNOWN` —
+  `SCHEMA_MISMATCH`, `NO_VALIDATOR`, `UNKNOWN` —
   reported in prose and logged as a machine label. Ambiguity reports `UNKNOWN`
   rather than guessing.
+- **Verdict validated against the schema it asked for.** A route with `schema=`
+  requires more than parseable JSON: required fields and types are walked
+  recursively, including array items, `["string","null"]` unions and `minItems`.
+  Parseability alone would accept `{"findings":[]}` — valid JSON meaning "no
+  objections" — and a type check alone would accept
+  `{"verdict":false,"summary":1}`. On top of the schema, an empty
+  `coverage.reviewed` is refused: it means nothing was read. The check fails
+  closed — an unparseable schema file, or a validator that dies, is a refusal
+  and never a pass (`reason: SCHEMA_MISMATCH`).
+- **Switch fields are an enumeration.** `ephemeral` and `confirm_background`
+  take only `yes` or `no`; a typo or an empty value is refused rather than read
+  silently as "no". `confirm_background` obeys `allows` like every other field.
 - **Generated documentation**: the route table in `SKILL.md` is produced from the
   registry by `gen-routes-table.sh`, and `--check` fails the test suite if the
   two drift apart.
-- **187 regression tests** (107 route, 80 snapshot) that run without a Codex
+- **206 regression tests** (126 route, 80 snapshot) that run without a Codex
   subscription.
 - **`install.sh`** with `--check` and `--uninstall`. It never overwrites an
   existing config file; where one exists and lacks what the project needs, it

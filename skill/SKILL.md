@@ -78,8 +78,8 @@ from foreign data.
 | `session_id` | optional | Continue a session (`resume`). **Strict UUID**: a value like `--last` would land after `resume` as a CLI option and continue somebody else's session |
 | `schema` | optional | `--output-schema`, see `reference/review-schema.json` |
 | `image` | image routes | A reference image. The line may be repeated |
-| `ephemeral` | optional | `yes` — the session is not written to disk |
-| `confirm_background` | background routes | `yes` — confirmation that the call was started in the background |
+| `ephemeral` | optional | Only `yes` or `no`. `yes` — the session is not written to disk. A typo (`yees`) or an empty value is **refused**, not silently read as "no" |
+| `confirm_background` | background routes | Only `yes` or `no`. Confirmation that the call was started in the background. Obeys `allows` like every other field: on a foreground route it is refused with exit 2 |
 
 An unknown field, an unknown route, or a field outside the route's allowed list
 is **refused with exit 2**, never silently defaulted.
@@ -325,8 +325,8 @@ later; git; timeout. If it does not recognise the failure it says so and points
 you at the transcript.
 
 The **machine label** (`RATE_LIMITED`, `AUTH`, `NO_SESSION`, `MODEL`, `NETWORK`,
-`GIT`, `TIMEOUT`, `EMPTY_VERDICT`, `BLANK_VERDICT`, `NOT_JSON`, `NO_VALIDATOR`,
-`UNKNOWN`) goes
+`GIT`, `TIMEOUT`, `EMPTY_VERDICT`, `BLANK_VERDICT`, `NOT_JSON`,
+`SCHEMA_MISMATCH`, `NO_VALIDATOR`, `UNKNOWN`) goes
 into the log as the `reason` field; it is not printed to the terminal.
 
 **A non-empty verdict is not proof that any work was done.** A plugin skill on
@@ -335,8 +335,26 @@ a confident paragraph explaining itself. All three checks above pass: the file
 exists, it is non-empty, and it contains more than whitespace. This has happened
 in practice. Two things reduce it:
 
-- Set `schema` on the route. The runner then requires the verdict to parse as
-  JSON, which a diverted run will not produce (`reason: NOT_JSON`).
+- Set `schema` on the route. The runner then requires the verdict not merely to
+  parse as JSON but to **match the schema the route asked for**: required fields
+  and types are checked recursively, including the items of arrays and unions
+  such as `["string","null"]` (`reason: NOT_JSON` when the reply is not JSON at
+  all, `SCHEMA_MISMATCH` when the shape is wrong). Parseability alone is not
+  enough — `{"findings":[]}` is valid JSON meaning "no objections", and a
+  diverted run returning that used to pass as a clean review. Type checking
+  alone is not enough either — `{"verdict":false,"summary":1}` has every
+  required field and no content. `minItems` is honoured where a schema states
+  it; `enum`, string formats and numeric bounds are deliberately not checked.
+  The goal is not to validate everything, it is to refuse to accept as a verdict
+  something that contains neither coverage nor a conclusion.
+- On top of the schema there is one rule of this skill: **an empty
+  `coverage.reviewed` is refused.** An empty list means nothing was read,
+  however convincing the prose — which is exactly what a diverted run looks
+  like. It lives in the runner rather than as `minItems` in the schema file
+  because that file is sent to the API as `--output-schema`, and the
+  structured-output subset there does not accept every JSON Schema keyword. The
+  rule applies only when the verdict actually carries that field, so a schema of
+  your own is unaffected.
 - Read `coverage.reviewed`. An empty list means nothing was read, however
   convincing the prose is.
 
@@ -436,6 +454,12 @@ wrongly reused in a neighbouring project.
 - **The content gate cannot see inside a binary.** git prints `Binary files
   differ` rather than bytes. The snapshot NAMES the binary files it could not
   scan, but naming them is all it can do.
+- **The name gate reads the file list line by line** (`ls-files` without `-z`).
+  A filename containing a control character would in principle split the line.
+  On Windows the case is unreachable — the OS strips such characters, so
+  `secr\net` simply becomes `secret` — and git escapes control characters inside
+  quotes regardless of `core.quotepath`. On a POSIX filesystem, where such names
+  are creatable, this remains a hole: switch the gate to `-z` there.
 - **Codex's execution policy rejects some commands.** In practice that is dozens
   of rejections per run, mostly long shell one-liners. This is why the templates
   ask it to name the commands it was not allowed to run: otherwise "checked" and
@@ -500,10 +524,13 @@ the fixes is **mandatory**.
 | exit 2, "a project-level Codex config was found" | There is a `.codex/config.toml` in the working directory or above. Read it yourself: it can declare an MCP server with an arbitrary command |
 | exit 2, "is not a full lowercase SHA" | You passed `HEAD`, a branch or an abbreviated SHA. Use the 40 characters from `codex-snapshot.sh` |
 | exit 2, "is not a UUID" | You passed `--last` or a thread name. Take the id from the header of the run you mean |
+| exit 2, "takes only yes or no" | A typo or an empty value in `ephemeral` or `confirm_background`. It used to be read silently as "no" |
+| exit 1, "does not match the requested schema" | The reply is JSON but lacks required fields or has wrong types (`reason: SCHEMA_MISMATCH`). The usual sign of a diverted run: a reply exists, work does not |
+| exit 1, "the schema check did not run" | The schema file does not parse as JSON. The check fails closed rather than passing the verdict through |
 | exit 9 instead of 0 | `CODEX_RUN_DRYRUN=1` is still set in the environment. Codex was not called |
 | exit 3 | A background-only route was started in the foreground. Restart it in the background |
 | "codex is not logged in" although you are | `codex login status` prints to **stderr** — do not silence it with `2>/dev/null` in your own checks |
-| "Codex version drift" | Codex was upgraded. Run both suites, re-check the CLI help, update `bin/expected-codex-version.txt` |
+| "Codex version drift" | Codex was upgraded. Run both suites, re-check the CLI help, update `bin/expected-codex-version.txt`. In `check-all.sh` this is a **failure**, not a note: on a different CLI version nothing confirms the kit's premises, while the bridge itself keeps working — the runner only warns |
 | Empty verdict while Codex exited 0 | A `-o` write error was swallowed. The runner catches this itself |
 | Snapshot stopped with exit 2 | A secret gate fired. Deal with the file; do not work around the gate |
 | "the repository has no commits" | There is no `--commit` form to use; handle it separately |

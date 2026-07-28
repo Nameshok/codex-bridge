@@ -171,6 +171,32 @@ plugin skills or their MCP tools. That was true before the plugin system existed
 and is a good example of why every claim about CLI behaviour needs re-running,
 not re-reading.
 
+**"Parses as JSON" was not enough, and neither was adding types.** Requiring
+parseable JSON closed the prose case and nothing else. `{"findings":[]}` is
+valid JSON that says "no objections", so a diverted run returning it passed
+every check and read as a clean review — and a test in the suite actively
+asserted that behaviour as correct. The verdict is now walked against the schema
+the route asked for. That fix then broke twice more, each time caught only by
+running it:
+
+- The first walk checked objects and arrays and ignored scalars, so
+  `{"verdict":false,"summary":1}` passed: every required field present, no
+  content in any of them.
+- The walk entered arrays on `sch.type === "array"`, which is false for
+  `["array","null"]`. Items of a union-typed array were never examined, and
+  `[1]` passed against `{"items":{"type":"string"}}`.
+
+Above the schema sits one rule JSON Schema cannot carry here: an empty
+`coverage.reviewed` is refused, because it means nothing was read. It is not
+written as `minItems` in the schema file because that file goes to the API as
+`--output-schema`, and the structured-output subset does not accept every
+keyword. The rule fires only when the verdict carries that field, so a schema of
+your own is untouched.
+
+The lesson is the old one in a new coat: each of these was a check reporting
+success while checking nothing, and each was found by running the validator
+against a reply built to defeat it — never by reading the code.
+
 ## Naming the reason for a failure
 
 "Exit code 1" looks identical for an exhausted quota, a dropped login and a

@@ -206,9 +206,23 @@ fi
 # ---------------------------------------------------------------- route fields
 
 allowed_field() { case ",$R_allows," in *",$1,"*) return 0 ;; esac; return 1; }
-for f in commit base session_id schema ephemeral; do
+for f in commit base session_id schema ephemeral confirm_background; do
   was_given "$f" && ! allowed_field "$f" && \
     die "route '$ROUTE' does not accept field '$f' (allowed: ${R_allows:-none})"
+done
+
+# Switch fields are checked against an enumeration. Without this, `ephemeral=yees`
+# silently meant "no": the value is compared against `yes` further down, so a typo
+# quietly turned the session persistent instead of stopping the call. `was_given`
+# rather than a non-empty test on purpose -- an explicitly empty `ephemeral=` is a
+# malformed value, not an omission, and letting it through restores the same
+# silent default through the back door.
+for f in ephemeral confirm_background; do
+  was_given "$f" || continue
+  case $(get "$f") in
+    yes|no) ;;
+    *) die "field '$f' takes only yes or no, got '$(get "$f")'" ;;
+  esac
 done
 if [ ${#IMAGES[@]} -gt 0 ] && ! allowed_field image; then
   die "route '$ROUTE' does not accept field 'image' (allowed: ${R_allows:-none})"
@@ -497,6 +511,74 @@ elif [ -n "$(get schema)" ]; then
     RUNNER_RC=1; REASON=NOT_JSON
     note "NO VERDICT: the route requested --output-schema, but the verdict file is not valid JSON."
     note "            Read it: the run was probably diverted before it did any work."
+  else
+    # Parseable is not enough. `{"findings":[]}` is valid JSON meaning "no
+    # objections": a diverted run returning that passed every check above and
+    # looked like a clean review. So the verdict is checked against the schema
+    # the route itself asked for -- required fields and types, recursively,
+    # including the items of arrays and unions such as ["string","null"].
+    # Deliberately NOT a full JSON Schema validator: enum, formats and numeric
+    # bounds are not checked. The goal is not to validate everything, it is to
+    # refuse to accept as a verdict something that contains neither coverage
+    # nor a conclusion.
+    MISS=$(node -e '
+      const fs=require("fs");
+      const v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+      const s=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
+      const miss=[];
+      const isObj=t=>t==="object"||(Array.isArray(t)&&t.includes("object"));
+      // Unions have to be honoured on the array side too. `sch.type==="array"`
+      // is false for ["array","null"], so the items of such a field were never
+      // walked and [1] passed against {"items":{"type":"string"}}.
+      const isArr=t=>t==="array"||(Array.isArray(t)&&t.includes("array"));
+      const typeOk=(val,t)=>(Array.isArray(t)?t:[t]).some(x=>
+        x==="string"  ? typeof val==="string"  :
+        x==="integer" ? Number.isInteger(val)  :
+        x==="number"  ? typeof val==="number"  :
+        x==="boolean" ? typeof val==="boolean" :
+        x==="null"    ? val===null             :
+        x==="object"  ? (val!==null&&typeof val==="object"&&!Array.isArray(val)) :
+        x==="array"   ? Array.isArray(val)     : true);
+      function chk(val,sch,path){
+        if(!sch||typeof sch!=="object")return;
+        if(sch.type!==undefined&&!typeOk(val,sch.type)){
+          miss.push((path||"<root>")+": type is not "+JSON.stringify(sch.type));return;
+        }
+        if(isObj(sch.type)&&val&&typeof val==="object"&&!Array.isArray(val)){
+          for(const r of sch.required||[]) if(!(r in val)) miss.push((path?path+".":"")+r+": required field missing");
+          for(const k of Object.keys(sch.properties||{})) if(k in val) chk(val[k],sch.properties[k],(path?path+".":"")+k);
+        }else if(isArr(sch.type)&&Array.isArray(val)){
+          if(Number.isInteger(sch.minItems)&&val.length<sch.minItems)
+            miss.push((path||"<root>")+": fewer than "+sch.minItems+" items");
+          if(sch.items) val.forEach((x,i)=>chk(x,sch.items,(path||"")+"["+i+"]"));
+        }
+      }
+      chk(v,s,"");
+      // A rule of this skill, not of JSON Schema: an empty coverage.reviewed
+      // means nothing was read, however confident the prose. It is checked here
+      // rather than as "minItems" in the schema file because --output-schema is
+      // sent to the API, and the structured-output subset there does not accept
+      // every JSON Schema keyword. Applied only when the verdict actually has
+      // that field, so an unrelated schema of your own is unaffected.
+      if(v&&typeof v==="object"&&v.coverage&&Array.isArray(v.coverage.reviewed)
+         &&v.coverage.reviewed.length===0)
+        miss.push("coverage.reviewed: empty -- nothing was read");
+      if(miss.length){console.log(miss.slice(0,6).join("; "));process.exit(1);}
+    ' "$OUT" "$(get schema)" 2>/dev/null); NODE_RC=$?
+    # Fail closed on both shapes of failure: a non-empty MISS is a real mismatch,
+    # an empty MISS with a non-zero exit means the validator itself died (an
+    # unparseable schema file, say). A check that reports "fine" when it breaks
+    # is worse than no check at all.
+    if [ -n "$MISS" ]; then
+      RUNNER_RC=1; REASON=SCHEMA_MISMATCH
+      note "NO VERDICT: the reply parses as JSON but does not match the requested schema:"
+      note "            $MISS"
+      note "            This is what a diverted run looks like: a reply exists, work does not."
+    elif [ "$NODE_RC" -ne 0 ]; then
+      RUNNER_RC=1; REASON=SCHEMA_MISMATCH
+      note "NO VERDICT: the schema check did not run (node exited $NODE_RC)."
+      note "            Check that the schema file parses as JSON: $(get schema)"
+    fi
   fi
 fi
 
